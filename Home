@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Crypto Playground</title>
+<style>
+  body{font-family:Arial, sans-serif;max-width:700px;margin:2rem auto;padding:0 1rem;color:#111;}
+  h1{font-size:1.5rem;margin-bottom:.5rem;}
+  label{display:block;margin:.5rem 0 .2rem;font-weight:600;}
+  input, textarea{width:100%;padding:.5rem;margin-bottom:.5rem;font-family:inherit;}
+  button{padding:.5rem 1rem;margin:.2rem 0;border:none;background:#0b74de;color:#fff;border-radius:5px;cursor:pointer;}
+  button.secondary{background:#444;}
+  textarea{resize:vertical;}
+  .row{display:flex;gap:.5rem;}
+</style>
+</head>
+<body>
+<h1>Crypto Playground — mot de passe</h1>
+<p>Entrez un mot secret pour chiffrer ou déchiffrer un message.</p>
+
+<label>Message à chiffrer</label>
+<textarea id="plaintext">Bonjour, test de chiffrement !</textarea>
+
+<label>Mot secret (mot de passe)</label>
+<input id="password" type="password" placeholder="Ton mot secret...">
+
+<div class="row">
+  <button id="encryptBtn">Chiffrer 🔒</button>
+  <button id="clearBtn" class="secondary">Effacer</button>
+</div>
+
+<label>Résultat (copie ce texte pour déchiffrer)</label>
+<textarea id="ciphertext" readonly placeholder="Base64 généré..."></textarea>
+
+<hr style="margin:1rem 0">
+
+<h2>Déchiffrer un message</h2>
+
+<label>Colle le texte chiffré (base64)</label>
+<textarea id="toDecrypt" placeholder="Texte chiffré ici..."></textarea>
+
+<label>Mot secret utilisé pour le chiffrement</label>
+<input id="password2" type="password" placeholder="Même mot secret">
+
+<div class="row">
+  <button id="decryptBtn">Déchiffrer 🔓</button>
+  <button id="clearDecrypt" class="secondary">Effacer</button>
+</div>
+
+<label>Message déchiffré</label>
+<textarea id="decrypted" readonly placeholder="Le message apparaîtra ici"></textarea>
+
+<script>
+// --- Utilitaires Base64 ---
+function bufToBase64(buf){ return btoa(String.fromCharCode(...new Uint8Array(buf))); }
+function base64ToBuf(b64){ const bin = atob(b64); const arr=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) arr[i]=bin.charCodeAt(i); return arr.buffer; }
+
+// --- Paramètres ---
+const SALT_LEN = 16;
+const IV_LEN = 12;
+const PBKDF2_ITERS = 200000;
+const KEY_LEN = 256;
+
+// --- Dériver clé depuis mot ---
+async function deriveKey(password, saltBuf){
+  const pwUtf8 = new TextEncoder().encode(password);
+  const baseKey = await crypto.subtle.importKey("raw", pwUtf8, {name:"PBKDF2"}, false, ["deriveKey"]);
+  const key = await crypto.subtle.deriveKey(
+    { name:"PBKDF2", salt:saltBuf, iterations:PBKDF2_ITERS, hash:"SHA-256" },
+    baseKey,
+    { name:"AES-GCM", length:KEY_LEN },
+    false,
+    ["encrypt","decrypt"]
+  );
+  return key;
+}
+
+// --- Chiffrement ---
+async function encryptWithPassword(plaintext, password){
+  if(!password) throw new Error("Mot vide");
+  const salt = crypto.getRandomValues(new Uint8Array(SALT_LEN));
+  const iv = crypto.getRandomValues(new Uint8Array(IV_LEN));
+  const key = await deriveKey(password, salt.buffer);
+  const ptBuf = new TextEncoder().encode(plaintext);
+  const ctBuf = await crypto.subtle.encrypt({name:"AES-GCM", iv:iv}, key, ptBuf);
+  const combined = new Uint8Array(salt.byteLength + iv.byteLength + ctBuf.byteLength);
+  combined.set(salt,0); combined.set(iv,SALT_LEN); combined.set(new Uint8Array(ctBuf), SALT_LEN+IV_LEN);
+  return bufToBase64(combined.buffer);
+}
+
+// --- Déchiffrement ---
+async function decryptWithPassword(b64, password){
+  if(!password) throw new Error("Mot vide");
+  const combined = new Uint8Array(base64ToBuf(b64));
+  if(combined.length<SALT_LEN+IV_LEN+1) throw new Error("Texte invalide");
+  const salt = combined.slice(0,SALT_LEN);
+  const iv = combined.slice(SALT_LEN,SALT_LEN+IV_LEN);
+  const ct = combined.slice(SALT_LEN+IV_LEN);
+  const key = await deriveKey(password,salt.buffer);
+  const plainBuf = await crypto.subtle.decrypt({name:"AES-GCM", iv:iv}, key, ct);
+  return new TextDecoder().decode(plainBuf);
+}
+
+// --- UI Chiffrement ---
+document.getElementById("encryptBtn").onclick = async ()=>{
+  try{
+    const pt = document.getElementById("plaintext").value;
+    const pw = document.getElementById("password").value;
+    const b64 = await encryptWithPassword(pt,pw);
+    document.getElementById("ciphertext").value = b64;
+    alert("Chiffrement réussi !");
+  }catch(e){ alert("Erreur: "+e.message); }
+};
+document.getElementById("clearBtn").onclick = ()=>{
+  document.getElementById("plaintext").value="";
+  document.getElementById("password").value="";
+  document.getElementById("ciphertext").value="";
+};
+
+// --- UI Déchiffrement ---
+document.getElementById("decryptBtn").onclick = async ()=>{
+  try{
+    const b64 = document.getElementById("toDecrypt").value;
+    const pw = document.getElementById("password2").value;
+    const pt = await decryptWithPassword(b64,pw);
+    document.getElementById("decrypted").value = pt;
+    alert("Déchiffrement réussi !");
+  }catch(e){ alert("Erreur: "+e.message); }
+};
+document.getElementById("clearDecrypt").onclick = ()=>{
+  document.getElementById("toDecrypt").value="";
+  document.getElementById("password2").value="";
+  document.getElementById("decrypted").value="";
+};
+</script>
+</body>
+</html>
